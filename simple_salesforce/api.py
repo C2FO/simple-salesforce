@@ -2,7 +2,7 @@
 
 
 # has to be defined prior to login import
-DEFAULT_API_VERSION = '29.0'
+DEFAULT_API_VERSION = '38.0'
 
 
 import logging
@@ -15,8 +15,13 @@ try:
 except ImportError:
     # Python 3+
     from urllib.parse import urlparse, urljoin
+
 from simple_salesforce.login import SalesforceLogin
-from simple_salesforce.util import date_to_iso8601, SalesforceError
+from simple_salesforce.util import date_to_iso8601, exception_handler
+from simple_salesforce.exceptions import (
+    SalesforceGeneralError
+)
+from simple_salesforce.bulk import SFBulkHandler
 
 try:
     from collections import OrderedDict
@@ -181,8 +186,8 @@ class Salesforce(object):
         json_result = result.json(object_pairs_hook=OrderedDict)
         if len(json_result) == 0:
             return None
-        else:
-            return json_result
+
+        return json_result
 
     # SObject Handler
     def __getattr__(self, name):
@@ -204,11 +209,16 @@ class Salesforce(object):
         if name.startswith('__'):
             return super(Salesforce, self).__getattr__(name)
 
+        if name == 'bulk':
+            # Deal with bulk API functions
+            return SFBulkHandler(self.session_id, self.bulk_url, self.proxies,
+                                 self.session)
+
         return SFType(
             name, self.session_id, self.sf_instance, sf_version=self.sf_version,
             proxies=self.proxies, session=self.session)
 
-    # User utlity methods
+    # User utility methods
     def set_password(self, user, password):
         """Sets the password of a user
 
@@ -235,8 +245,8 @@ class Salesforce(object):
         json_result = result.json(object_pairs_hook=OrderedDict)
         if len(json_result) == 0:
             return None
-        else:
-            return json_result
+
+        return json_result
 
     # pylint: disable=invalid-name
     def setPassword(self, user, password):
@@ -253,7 +263,7 @@ class Salesforce(object):
         """
         warnings.warn(
             "This method has been deprecated."
-            "Please use set_password instread.",
+            "Please use set_password instead.",
             DeprecationWarning)
         return self.set_password(user, password)
 
@@ -279,8 +289,8 @@ class Salesforce(object):
         json_result = result.json(object_pairs_hook=OrderedDict)
         if len(json_result) == 0:
             return None
-        else:
-            return json_result
+
+        return json_result
 
     # Search Functions
     def search(self, search):
@@ -305,8 +315,8 @@ class Salesforce(object):
         json_result = result.json(object_pairs_hook=OrderedDict)
         if len(json_result) == 0:
             return None
-        else:
-            return json_result
+
+        return json_result
 
     def quick_search(self, search):
         """Returns the result of a Salesforce search as a dict decoded from
@@ -329,7 +339,7 @@ class Salesforce(object):
         Arguments:
 
         * query -- the SOQL query to send to Salesforce, e.g.
-                   `SELECT Id FROM Lead WHERE Email = "waldo@somewhere.com"`
+                   SELECT Id FROM Lead WHERE Email = "waldo@somewhere.com"
         """
         url = self.base_url + 'query/'
         params = {'q': query}
@@ -337,7 +347,7 @@ class Salesforce(object):
         result = self._call_salesforce('GET', url, params=params, **kwargs)
 
         if result.status_code != 200:
-            _exception_handler(result)
+            exception_handler(result)
 
         return result.json(object_pairs_hook=OrderedDict)
 
@@ -354,7 +364,7 @@ class Salesforce(object):
                                      next record in the result.
         * identifier_is_url -- True if `next_records_identifier` should be
                                treated as a URL, False if
-                               `next_records_identifer` should be treated as
+                               `next_records_identifier` should be treated as
                                an Id.
         """
         if identifier_is_url:
@@ -368,7 +378,7 @@ class Salesforce(object):
         result = self._call_salesforce('GET', url, **kwargs)
 
         if result.status_code != 200:
-            _exception_handler(result)
+            exception_handler(result)
 
         return result.json(object_pairs_hook=OrderedDict)
 
@@ -385,7 +395,7 @@ class Salesforce(object):
         Arguments
 
         * query -- the SOQL query to send to Salesforce, e.g.
-                   `SELECT Id FROM Lead WHERE Email = "waldo@somewhere.com"`
+                   SELECT Id FROM Lead WHERE Email = "waldo@somewhere.com"
         """
 
         result = self.query(query, **kwargs)
@@ -433,7 +443,7 @@ class Salesforce(object):
             method, url, headers=self.headers, **kwargs)
 
         if result.status_code >= 300:
-            _exception_handler(result)
+            exception_handler(result)
 
         return result
 
@@ -455,8 +465,8 @@ class SFType(object):
 
     # pylint: disable=too-many-arguments
     def __init__(
-            self, object_name, session_id, sf_instance, sf_version='27.0',
-            proxies=None, session=None):
+            self, object_name, session_id, sf_instance,
+            sf_version=DEFAULT_API_VERSION, proxies=None, session=None):
         """Initialize the instance with the given parameters.
 
         Arguments:
@@ -711,7 +721,7 @@ class SFType(object):
         result = self.session.request(method, url, headers=headers, **kwargs)
 
         if result.status_code >= 300:
-            _exception_handler(result, self.name)
+            exception_handler(result, self.name)
 
         return result
 
@@ -724,8 +734,8 @@ class SFType(object):
         """
         if not body_flag:
             return response.status_code
-        else:
-            return response
+
+        return response
 
     @property
     def request(self):
@@ -773,82 +783,3 @@ class SalesforceAPI(Salesforce):
                                             security_token=security_token,
                                             sandbox=sandbox,
                                             version=sf_version)
-
-
-def _exception_handler(result, name=""):
-    """Exception router. Determines which error to raise for bad results"""
-    try:
-        response_content = result.json()
-    # pylint: disable=broad-except
-    except Exception:
-        response_content = result.text
-
-    exc_map = {
-        300: SalesforceMoreThanOneRecord,
-        400: SalesforceMalformedRequest,
-        401: SalesforceExpiredSession,
-        403: SalesforceRefusedRequest,
-        404: SalesforceResourceNotFound,
-    }
-    exc_cls = exc_map.get(result.status_code, SalesforceGeneralError)
-
-    raise exc_cls(result.url, result.status_code, name, response_content)
-
-
-class SalesforceMoreThanOneRecord(SalesforceError):
-    """
-    Error Code: 300
-    The value returned when an external ID exists in more than one record. The
-    response body contains the list of matching records.
-    """
-    message = u"More than one record for {url}. Response content: {content}"
-
-
-class SalesforceMalformedRequest(SalesforceError):
-    """
-    Error Code: 400
-    The request couldn't be understood, usually becaue the JSON or XML body
-    contains an error.
-    """
-    message = u"Malformed request {url}. Response content: {content}"
-
-
-class SalesforceExpiredSession(SalesforceError):
-    """
-    Error Code: 401
-    The session ID or OAuth token used has expired or is invalid. The response
-    body contains the message and errorCode.
-    """
-    message = u"Expired session for {url}. Response content: {content}"
-
-
-class SalesforceRefusedRequest(SalesforceError):
-    """
-    Error Code: 403
-    The request has been refused. Verify that the logged-in user has
-    appropriate permissions.
-    """
-    message = u"Request refused for {url}. Response content: {content}"
-
-
-class SalesforceResourceNotFound(SalesforceError):
-    """
-    Error Code: 404
-    The requested resource couldn't be found. Check the URI for errors, and
-    verify that there are no sharing issues.
-    """
-    message = u'Resource {name} Not Found. Response content: {content}'
-
-    def __str__(self):
-        return self.message.format(name=self.resource_name,
-                                   content=self.content)
-
-
-class SalesforceGeneralError(SalesforceError):
-    """
-    A non-specific Salesforce error.
-    """
-    message = u'Error Code {status}. Response content: {content}'
-
-    def __str__(self):
-        return self.message.format(status=self.status, content=self.content)

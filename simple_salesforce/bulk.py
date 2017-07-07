@@ -145,7 +145,9 @@ class SFBulkType(object):
         return result.json(object_pairs_hook=OrderedDict)
 
     def _get_batch_results(self, job_id, batch_id, operation):
-        """ retrieve a set of results from a completed job """
+        """ Retrieve a set of results from a completed job.
+        If the operation is a query loop through the results
+        """
 
         url = "{}{}{}{}{}{}".format(self.bulk_url, 'job/', job_id, '/batch/',
                                     batch_id, '/result')
@@ -154,11 +156,16 @@ class SFBulkType(object):
                                   headers=self.headers)
 
         if operation == 'query':
-            url_query_results = "{}{}{}".format(url, '/', result.json()[0])
-            query_result = call_salesforce(url=url_query_results, method='GET',
-                                            session=self.session,
-                                            headers=self.headers)
-            return query_result.json()
+            result_json = []
+            for batch_result in result.json():
+                url_query_results = "{}{}{}".format(url, '/', batch_result)
+                query_result = call_salesforce(url=url_query_results,
+                                                method='GET',
+                                                session=self.session,
+                                                headers=self.headers)
+                result_json += query_result.json()
+
+            return result_json
 
         return result.json()
 

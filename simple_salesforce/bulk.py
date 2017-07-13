@@ -205,6 +205,73 @@ class SFBulkType(object):
                                           operation=operation)
         return results
 
+    def _get_query_batch_results_ids(self, job_id, batch_id):
+        """ Retrieve a set of batch results ids from a completed query.
+        the query batch results then can be processed individually
+        """
+
+        url = "{}{}{}{}{}{}".format(self.bulk_url, 'job/', job_id, '/batch/',
+                                    batch_id, '/result')
+
+        result = call_salesforce(url=url, method='GET', session=self.session,
+                                 headers=self.headers)
+
+        return result.json()
+
+    def _get_query_batch_results(self, job_id, batch_id, batch_results_id):
+        """ Retrieve a set of results from a batch for a completed
+        query that returns multiple batches.
+        """
+
+        url = "{}{}{}{}{}{}{}".format(self.bulk_url, 'job/', job_id, '/batch/',
+                                      batch_id, '/result/', batch_results_id)
+
+        result = call_salesforce(url=url, method='GET', session=self.session,
+                                 headers=self.headers)
+
+        return result.json()
+
+    def _bulk_query_operation(self, object_name, data, operation='query', external_id_field=None, wait=5):
+        """ String together helper functions to create a complete
+        end-to-end bulk API request for queries that returns data
+        in multiple batches.
+
+        Returns all the arguments needed to process the results separately.
+
+        Arguments:
+
+        * object_name -- SF object
+        * operation -- Bulk operation to be performed by job
+        * data -- list of dict to be passed as a batch
+        * external_id_field -- unique identifier field for upsert operations
+        * wait -- seconds to sleep between checking batch status
+        """
+
+        job = self._create_job(object_name=object_name, operation=operation,
+                               external_id_field=external_id_field)
+
+        job_id = job['id']
+
+        batch = self._add_batch(job_id=job_id, data=data,
+                                operation=operation)
+
+        batch_id = batch['id']
+
+        self._close_job(job_id=job['id'])
+
+        batch_status = self._get_batch(job_id=job_id,
+                                       batch_id=batch['id'])['state']
+
+        while batch_status not in ['Completed', 'Failed', 'Not Processed']:
+            sleep(wait)
+            batch_status = self._get_batch(job_id=job_id,
+                                           batch_id=batch_id)['state']
+
+        batch_results_ids = self._get_query_batch_results_ids(job_id=job_id,
+                                                              batch_id=batch_id)
+
+        return self, job_id, batch_id, batch_results_ids
+
     # _bulk_operation wrappers to expose supported Salesforce bulk operations
     def delete(self, data):
         """ soft delete records """
@@ -242,4 +309,18 @@ class SFBulkType(object):
         """ bulk query """
         results = self._bulk_operation(object_name=self.object_name,
                                        operation='query', data=data)
+        return results
+
+    def query_batches(self, data):
+        """ return the batch results ids for individual processing  """
+        sf_bulk, job_id, batch_id, \
+        batch_results_ids = self._bulk_query_operation(object_name=self.object_name,
+                                                       operation='query', data=data)
+        return sf_bulk, job_id, batch_id, batch_results_ids
+
+    def query_batch_results(self, sf_bulk, job_id, batch_id, batch_results_id):
+        """ return the results for a bulk query  """
+        self = sf_bulk
+        results = self._get_query_batch_results(job_id=job_id, batch_id=batch_id,
+                                                batch_results_id=batch_results_id)
         return results

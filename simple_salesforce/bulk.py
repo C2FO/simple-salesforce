@@ -270,7 +270,7 @@ class SFBulkType(object):
         batch_results_ids = self._get_query_batch_results_ids(job_id=job_id,
                                                               batch_id=batch_id)
 
-        return self, job_id, batch_id, batch_results_ids
+        return job_id, batch_id, batch_results_ids
 
     # _bulk_operation wrappers to expose supported Salesforce bulk operations
     def delete(self, data):
@@ -313,14 +313,12 @@ class SFBulkType(object):
 
     def query_batches(self, data):
         """ return the batch results ids for individual processing  """
-        sf_bulk, job_id, batch_id, \
-        batch_results_ids = self._bulk_query_operation(object_name=self.object_name,
-                                                       operation='query', data=data)
-        return sf_bulk, job_id, batch_id, batch_results_ids
+        job_id, batch_id, batch_results_ids = self._bulk_query_operation(object_name=self.object_name,
+                                                                         operation='query', data=data)
+        return job_id, batch_id, batch_results_ids
 
-    def query_batch_results(self, sf_bulk, job_id, batch_id, batch_results_id):
+    def query_batch_results(self, job_id, batch_id, batch_results_id):
         """ return the results for a bulk query  """
-        self = sf_bulk
         results = self._get_query_batch_results(job_id=job_id, batch_id=batch_id,
                                                 batch_results_id=batch_results_id)
         return results
